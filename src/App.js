@@ -517,24 +517,38 @@ function ConversationTab() {
   const [listening, setListening] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(true);
   const [speaking, setSpeaking] = useState(false);
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [micError, setMicError] = useState(null);
   const [voiceSupported] = useState(() => "SpeechRecognition" in window || "webkitSpeechRecognition" in window);
   const recognitionRef = useState(null);
 
+  // iOS requires audio to be unlocked by a user gesture first
+  const unlockAudio = () => {
+    if (audioUnlocked) return;
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    ctx.resume().then(() => setAudioUnlocked(true));
+    // Also prime speechSynthesis with a silent utterance
+    const utt = new SpeechSynthesisUtterance("");
+    window.speechSynthesis.speak(utt);
+    setAudioUnlocked(true);
+  };
+
   const speak = (text) => {
-    if (!window.speechSynthesis) return;
+    if (!speakerOn || !window.speechSynthesis) return;
     window.speechSynthesis.cancel();
     const clean = text.replace(/\(.*?\)/g, "").trim();
     const utt = new SpeechSynthesisUtterance(clean);
     utt.lang = "es-ES";
-    utt.rate = 0.88;
-    utt.pitch = 1.05;
+    utt.rate = 0.85;
+    utt.pitch = 1.0;
+    utt.volume = 1.0;
     const trySpeak = () => {
       const voices = window.speechSynthesis.getVoices();
       const spanish = voices.find(v => v.lang.startsWith("es")) || voices[0];
       if (spanish) utt.voice = spanish;
       utt.onstart = () => setSpeaking(true);
       utt.onend = () => setSpeaking(false);
-      utt.onerror = () => setSpeaking(false);
+      utt.onerror = (e) => { setSpeaking(false); };
       window.speechSynthesis.speak(utt);
     };
     if (window.speechSynthesis.getVoices().length === 0) {
@@ -543,21 +557,33 @@ function ConversationTab() {
   };
 
   const startListening = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
-    const recognition = new SpeechRecognition();
-    recognition.lang = "es-ES";
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-    recognitionRef[0] = recognition;
-    recognition.onresult = (e) => {
-      const transcript = e.results[0][0].transcript;
-      setInput(prev => prev ? prev + " " + transcript : transcript);
-    };
-    recognition.onend = () => setListening(false);
-    recognition.onerror = () => setListening(false);
-    recognition.start();
-    setListening(true);
+    setMicError(null);
+    // iOS Safari needs explicit getUserMedia permission first
+    navigator.mediaDevices?.getUserMedia({ audio: true })
+      .then(() => {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) { setMicError("Speech recognition not supported on this browser."); return; }
+        const recognition = new SpeechRecognition();
+        recognition.lang = "es-ES";
+        recognition.interimResults = false;
+        recognition.maxAlternatives = 1;
+        recognitionRef[0] = recognition;
+        recognition.onresult = (e) => {
+          const transcript = e.results[0][0].transcript;
+          setInput(prev => prev ? prev + " " + transcript : transcript);
+        };
+        recognition.onend = () => setListening(false);
+        recognition.onerror = (e) => {
+          setMicError("Mic error: " + e.error + ". Check Settings > Safari > Microphone.");
+          setListening(false);
+        };
+        recognition.start();
+        setListening(true);
+      })
+      .catch(() => {
+        setMicError("Microphone blocked. Go to Settings > Safari > Microphone and set to Allow.");
+        setListening(false);
+      });
   };
 
   const stopListening = () => {
@@ -631,17 +657,35 @@ function ConversationTab() {
           Choose a scenario and chat with an AI native speaker. It'll correct your mistakes naturally!
         </div>
         <div style={{
-          background: "rgba(26,92,58,0.2)", border: "1px solid rgba(26,92,58,0.5)",
-          borderRadius: 14, padding: "14px 16px", marginBottom: 24, fontSize: 13,
+          background: "rgba(255,60,0,0.1)", border: "1px solid rgba(255,60,0,0.3)",
+          borderRadius: 14, padding: "14px 16px", marginBottom: 16, fontSize: 13,
           color: "rgba(255,245,235,0.75)", lineHeight: 1.6,
         }}>
-          💡 <strong style={{ color: "#4ade80" }}>How it works:</strong> Type <em>or speak</em> in Spanish using the 🎤 mic button. The AI will respond in Spanish, gently correct mistakes, and keep the conversation going.
+          💡 <strong style={{ color: "#ff6a00" }}>How it works:</strong> Type <em>or speak</em> in Spanish using the 🎤 mic button. The AI will respond in Spanish, gently correct mistakes, and keep the conversation going.
         </div>
+
+        {!audioUnlocked && (
+          <button onClick={unlockAudio} style={{
+            width: "100%", padding: "16px", borderRadius: 14, cursor: "pointer", marginBottom: 16,
+            background: "linear-gradient(135deg, #e63000, #ff6a00)", border: "none",
+            color: "#fff", fontSize: 15, fontWeight: "bold", fontFamily: "Georgia, serif",
+          }}>
+            🔊 Tap here first to enable audio & mic
+          </button>
+        )}
+
+        {micError && (
+          <div style={{
+            background: "rgba(220,38,38,0.15)", border: "1px solid rgba(220,38,38,0.4)",
+            borderRadius: 12, padding: "12px 16px", marginBottom: 16, fontSize: 13,
+            color: "#fca5a5",
+          }}>⚠️ {micError}</div>
+        )}
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           {SCENARIOS.map((sc) => (
-            <button key={sc.id} onClick={() => startScenario(sc)} style={{
-              background: "linear-gradient(135deg, rgba(26,92,58,0.25), rgba(26,92,58,0.1))",
-              border: "1px solid rgba(26,92,58,0.4)", borderRadius: 16,
+            <button key={sc.id} onClick={() => { unlockAudio(); startScenario(sc); }} style={{
+              background: "linear-gradient(135deg, rgba(230,48,0,0.2), rgba(230,48,0,0.08))",
+              border: "1px solid rgba(230,48,0,0.35)", borderRadius: 16,
               padding: "20px", cursor: "pointer", textAlign: "left", color: "#fff5f0",
               fontFamily: "Georgia, serif", transition: "transform 0.15s",
             }}
@@ -897,4 +941,5 @@ function GrammarTab({ grammarIndex, setGrammarIndex }) {
     </div>
   );
 }
+
 
